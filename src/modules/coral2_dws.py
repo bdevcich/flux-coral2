@@ -839,7 +839,11 @@ def populate_rabbits_dict(k8s_api):
     systemconf = k8s_api.get_namespaced_custom_object(
         *crd.SYSTEMCONFIGURATION_CRD, "default"
     )
-    for nnf in systemconf["spec"]["storageNodes"]:
+    if len(api_response["items"]) < 1:
+        raise Exception(
+            f"No {RABBIT_CRD.group}.{RABBIT_CRD.plural} found in Kubernetes, cannot populate rabbits dict"
+        )
+    for nnf in api_response["items"]:
         hlist = Hostlist()
         try:
             rabbit_computes = nnf["computesAccess"]
@@ -974,14 +978,22 @@ def main():
             handle.conf_get(f"rabbit.policy.maximums.{fs_type}"),
         )
     try:
-        k8s_api = cleanup.get_k8s_api(handle.conf_get("rabbit.kubeconfig"))
-    except Exception:
-        LOGGER.critical(
-            "Service cannot run without access to kubernetes, shutting down"
-        )
+        k8s_api = k8s.client.CustomObjectsApi(k8s_client)
+    except ApiException as rest_exception:
+        if rest_exception.status == 403:
+            LOGGER.exception(
+                "You must be logged in to the K8s or OpenShift cluster to continue"
+            )
+            sys.exit(_EXITCODE_NORESTART)
+        LOGGER.exception("Cannot access kubernetes, service will shut down")
         sys.exit(_EXITCODE_NORESTART)
-    cleanup.setup_cleanup_thread(handle.conf_get("rabbit.kubeconfig"))
-    populate_rabbits_dict(k8s_api)
+    # build the list of rabbits from the Servers resource in k8s
+    try:
+        populate_rabbits_dict(k8s_api)
+    except Exception as exc:
+        LOGGER.exception(str(exc))
+        sys.exit(_EXITCODE_NORESTART)
+    handle = flux.Flux()
     # create a timer watcher for killing workflows that have been stuck in
     # the "Error" state for too long
     tc_timeout = handle.conf_get("rabbit.tc_timeout", 10)
