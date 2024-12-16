@@ -771,6 +771,10 @@ def populate_rabbits_dict(k8s_api):
     api_response = k8s_api.list_cluster_custom_object(
         RABBIT_CRD.group, RABBIT_CRD.version, RABBIT_CRD.plural
     )
+    if len(api_response["items"]) < 1:
+        raise Exception(
+            f"No {RABBIT_CRD.group}.{RABBIT_CRD.plural} found in Kubernetes, cannot populate rabbits dict"
+        )
     for nnf in api_response["items"]:
         hlist = Hostlist()
         for compute in nnf["status"]["access"].get("computes", []):
@@ -846,7 +850,12 @@ def main():
             sys.exit(_EXITCODE_NORESTART)
         LOGGER.exception("Cannot access kubernetes, service will shut down")
         sys.exit(_EXITCODE_NORESTART)
-    populate_rabbits_dict(k8s_api)
+    # build the list of rabbits from the Servers resource in k8s
+    try:
+        populate_rabbits_dict(k8s_api)
+    except Exception as exc:
+        LOGGER.exception(str(exc))
+        sys.exit(_EXITCODE_NORESTART)
     handle = flux.Flux()
     # create a timer watcher for killing workflows that have been stuck in
     # the "Error" state for too long
